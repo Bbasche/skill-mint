@@ -19238,7 +19238,8 @@ var require_auth = __commonJS({
     }
     exports.removeTrailingSlash = removeTrailingSlash;
     function verifyAuthProperties(authParm, domain, version2, chainId) {
-      if (authParm.domain && authParm.domain !== domain) {
+      var normUrl = function(u) { return (u || '').trim().replace(/\/+$/, ''); };
+      if (authParm.domain && normUrl(authParm.domain) !== normUrl(domain)) {
         throw new Error(`Domain mismatch: ${authParm.domain} !== ${domain}`);
       }
       if (authParm.version && authParm.version !== version2) {

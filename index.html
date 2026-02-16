@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Skill Mint — idOS Credential Issuer</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      body {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        background: #0f0c29;
+        color: #e0e0e0;
+      }
+      /* idOS Enclave iframe container — hidden by default, visible when enclave needs UI */
+      #idOS-enclave {
+        position: fixed;
+        bottom: 0;
+        right: 0;
+        width: 0;
+        height: 0;
+        border: none;
+        overflow: hidden;
+        z-index: 10000;
+        transition: all 0.3s ease;
+      }
+      #idOS-enclave.visible {
+        width: 400px;
+        height: 200px;
+        border: 1px solid rgba(102, 126, 234, 0.3);
+        border-radius: 12px 0 0 0;
+        background: #1a1a2e;
+        box-shadow: -4px -4px 20px rgba(0, 0, 0, 0.5);
+        overflow: visible;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <div id="idOS-enclave"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

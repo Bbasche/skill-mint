@@ -1,8 +1,8 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
-import { useAccount, useConnectorClient } from "wagmi";
-import { BrowserProvider, JsonRpcSigner } from "ethers";
+import { useAccount, useWalletClient } from "wagmi";
 import { createIDOSClient } from "@idos-network/client";
+import { recoverMessageAddress } from "viem";
 
 // ─── Config ──────────────────────────────────────────────────────────
 const IDOS_NODE_URL = import.meta.env.VITE_IDOS_NODE_URL || "https://nodes.playground.idos.network";
@@ -10,27 +10,48 @@ const IDOS_ENCLAVE_URL = import.meta.env.VITE_IDOS_ENCLAVE_URL || "https://encla
 const ISSUER_PUBLIC_KEY = import.meta.env.VITE_ISSUER_SIGNING_PUBLIC_KEY;
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || (import.meta.env.PROD ? "" : "http://localhost:3333");
 
-// ─── wagmi viem Client → ethers JsonRpcSigner adapter ───────────────
-// This is the official approach used by the idOS data dashboard:
-// Convert wagmi's viem Client to ethers BrowserProvider + JsonRpcSigner.
-// The idOS SDK (kwil-js) expects an ethers-compatible signer.
-function clientToSigner(client) {
-  const { account, chain, transport } = client;
-  const network = {
-    chainId: chain.id,
-    name: chain.name,
-    ensAddress: chain.contracts?.ensRegistry?.address,
-  };
-  const provider = new BrowserProvider(transport, network);
-  return new JsonRpcSigner(provider, account.address);
-}
+// ─── Direct viem signer (bypasses ethers entirely) ──────────────────
+// The idOS SDK (kwil-js) needs an object with:
+//   - signMessage(Uint8Array) → hex string  (for KwilSigner/ethSign)
+//   - getAddress() → string                  (for createClientKwilSigner)
+//   - "connect" property + "address" property (for EVM wallet detection)
+function createViemSigner(walletClient) {
+  const addr = walletClient.account.address;
+  const signer = {
+    address: addr,
+    connect: () => signer,
+    getAddress: async () => addr,
+    signMessage: async (message) => {
+      // kwil-js calls signMessage(Uint8Array) and expects a hex string back.
+      // Use viem's signMessage with raw bytes – this sends personal_sign to
+      // the wallet exactly as ethers would.
+      const raw = message instanceof Uint8Array ? message : new TextEncoder().encode(message);
 
-function useEthersSigner({ chainId } = {}) {
-  const { data: walletClient } = useConnectorClient({ chainId });
-  return useMemo(
-    () => (walletClient ? clientToSigner(walletClient) : undefined),
-    [walletClient],
-  );
+      console.log("[SkillMint] signMessage called, byte length:", raw.length);
+      console.log("[SkillMint] message preview:", new TextDecoder().decode(raw.slice(0, 200)));
+
+      const sig = await walletClient.signMessage({
+        account: walletClient.account,
+        message: { raw },
+      });
+
+      // Client-side verification: recover the address from the signature
+      try {
+        const recovered = await recoverMessageAddress({
+          message: { raw },
+          signature: sig,
+        });
+        console.log("[SkillMint] Expected address:", addr);
+        console.log("[SkillMint] Recovered address:", recovered);
+        console.log("[SkillMint] Match:", recovered.toLowerCase() === addr.toLowerCase());
+      } catch (e) {
+        console.error("[SkillMint] Client-side recovery failed:", e);
+      }
+
+      return sig;
+    },
+  };
+  return signer;
 }
 
 // ─── Skill Badge Data ────────────────────────────────────────────────
@@ -94,7 +115,11 @@ const SKILL_BADGES = [
 // ─── Main Component ──────────────────────────────────────────────────
 export default function App() {
   const { address, isConnected } = useAccount();
-  const signer = useEthersSigner();
+  const { data: walletClient } = useWalletClient();
+  const signer = useMemo(
+    () => (walletClient ? createViemSigner(walletClient) : undefined),
+    [walletClient],
+  );
 
   // idOS and wallet state
   const [idosClient, setIdosClient] = useState(null);

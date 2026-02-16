@@ -6,11 +6,10 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      // Use locally-patched SDK to bypass build-time patching issues on Vercel.
-      // The patched version translates old message format to the new enclave protocol.
+      // Use bundled rc.1.2 SDK built from main branch source
       "@idos-network/client": path.resolve(
         __dirname,
-        "src/lib/idos-client-patched.js"
+        "src/lib/idos-client-bundled.js"
       ),
     },
   },

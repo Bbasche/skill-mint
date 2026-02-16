@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { useAccount, useConnectorClient } from "wagmi";
+import { signMessage as viemSignMessage } from "viem/actions";
 import { createIDOSClient } from "@idos-network/client";
 
 // ─── Config ──────────────────────────────────────────────────────────
@@ -9,31 +10,33 @@ const IDOS_ENCLAVE_URL = import.meta.env.VITE_IDOS_ENCLAVE_URL || "https://encla
 const ISSUER_PUBLIC_KEY = import.meta.env.VITE_ISSUER_SIGNING_PUBLIC_KEY;
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || (import.meta.env.PROD ? "" : "http://localhost:3333");
 
-// ─── wagmi walletClient → ethers-like signer adapter ────────────────
-// Creates a minimal ethers-compatible signer from viem's walletClient
-// that the idOS SDK can use (needs: connect, address, getAddress, signMessage)
+// ─── wagmi connector client → ethers-like signer adapter ────────────
+// The idOS SDK (createClientKwilSigner) checks for "connect" in wallet && "address" in wallet
+// to detect an EVM signer, then calls wallet.getAddress() and creates KwilSigner(wallet, address).
+// KwilSigner later calls wallet.signMessage(message) where message is a string.
+// wagmi's useConnectorClient returns a viem Client (not WalletClient), so we use
+// viem's signMessage action to sign through it.
 function useIdosSigner() {
-  const { data: walletClient } = useConnectorClient();
+  const { data: client } = useConnectorClient();
   return useMemo(() => {
-    if (!walletClient) return undefined;
-    const addr = walletClient.account.address;
+    if (!client?.account) return undefined;
+    const addr = client.account.address;
     return {
       // Properties the idOS SDK checks for ethers signer detection
       address: addr,
       connect: () => {},
       getAddress: async () => addr,
-      // signMessage: called by kwil-js with a Uint8Array message
-      // Must return a hex signature string (0x-prefixed)
+      // signMessage: called by kwil-js KwilSigner with a string message
+      // Uses viem's signMessage action which works with the raw Client
       signMessage: async (message) => {
-        // kwil-js passes Uint8Array; viem expects string or { raw: bytes }
-        const sig = await walletClient.signMessage({
-          message: { raw: message instanceof Uint8Array ? message : new TextEncoder().encode(message) },
-          account: walletClient.account,
+        const sig = await viemSignMessage(client, {
+          message: typeof message === "string" ? message : { raw: message },
+          account: client.account,
         });
         return sig;
       },
     };
-  }, [walletClient]);
+  }, [client]);
 }
 
 // ─── Skill Badge Data ────────────────────────────────────────────────

@@ -116,50 +116,37 @@ export default function App() {
         setStatus("Initializing idOS client...");
         setErrorMessage("");
 
-        // Create idOS client
-        const client = await createIDOSClient({
+        // rc.1.0 API: createIDOSClient → createClient → withUserSigner → logIn
+        const config = createIDOSClient({
           nodeUrl: IDOS_NODE_URL,
-          enclaveUrl: IDOS_ENCLAVE_URL,
-          getEncryptionMaterial: async () => ({
-            publicKey: walletPublicKey,
-            encryptionKey: userEncryptionKey,
-          }),
-          getJsonRpcSigner: async () => signer,
-          iframeContainer: iframeRef.current || document.body,
+          enclaveOptions: {
+            container: iframeRef.current || document.body,
+            url: IDOS_ENCLAVE_URL,
+          },
         });
 
-        // Load idOS data
-        await client.load();
-        setIdosClient(client);
+        // createClient() internally loads the enclave iframe
+        setStatus("Loading idOS enclave...");
+        const idle = await config.createClient();
+
+        // Attach the wallet signer
+        setStatus("Connecting wallet signer...");
+        const withSigner = await idle.withUserSigner(signer);
+
+        // Log in to idOS
+        setStatus("Logging in to idOS...");
+        const loggedIn = await withSigner.logIn();
+
+        setIdosClient(loggedIn);
         setIdosReady(true);
         setStatus("idOS client ready");
-
-        // Fetch user's encryption keys
-        try {
-          const keys = await client.data.getEd25519EncryptionPublicKey();
-          if (keys) {
-            setUserEncryptionKey(keys);
-          }
-        } catch (err) {
-          console.warn("Could not fetch user encryption key:", err);
-        }
-
-        // Get wallet identifier for later signing
-        try {
-          const walletId = await client.data.getWalletId();
-          if (walletId) {
-            setWalletPublicKey(walletId);
-          }
-        } catch (err) {
-          console.warn("Could not fetch wallet ID:", err);
-        }
       } catch (err) {
         console.error("idOS init error:", err);
         setErrorMessage("Failed to initialize idOS: " + err.message);
         setIdosReady(false);
       }
     })();
-  }, [address, signer, walletPublicKey, userEncryptionKey]);
+  }, [address, signer]);
 
   // ─── Handle badge toggle ──────────────────────────────────────────
   const handleBadgeToggle = useCallback((badgeId) => {

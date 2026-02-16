@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { useAccount, useConnectorClient } from "wagmi";
-import { signMessage as viemSignMessage } from "viem/actions";
+import { BrowserProvider, JsonRpcSigner } from "ethers";
 import { createIDOSClient } from "@idos-network/client";
 
 // ─── Config ──────────────────────────────────────────────────────────
@@ -10,33 +10,27 @@ const IDOS_ENCLAVE_URL = import.meta.env.VITE_IDOS_ENCLAVE_URL || "https://encla
 const ISSUER_PUBLIC_KEY = import.meta.env.VITE_ISSUER_SIGNING_PUBLIC_KEY;
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || (import.meta.env.PROD ? "" : "http://localhost:3333");
 
-// ─── wagmi connector client → ethers-like signer adapter ────────────
-// The idOS SDK (createClientKwilSigner) checks for "connect" in wallet && "address" in wallet
-// to detect an EVM signer, then calls wallet.getAddress() and creates KwilSigner(wallet, address).
-// KwilSigner later calls wallet.signMessage(message) where message is a string.
-// wagmi's useConnectorClient returns a viem Client (not WalletClient), so we use
-// viem's signMessage action to sign through it.
-function useIdosSigner() {
-  const { data: client } = useConnectorClient();
-  return useMemo(() => {
-    if (!client?.account) return undefined;
-    const addr = client.account.address;
-    return {
-      // Properties the idOS SDK checks for ethers signer detection
-      address: addr,
-      connect: () => {},
-      getAddress: async () => addr,
-      // signMessage: called by kwil-js KwilSigner with a string message
-      // Uses viem's signMessage action which works with the raw Client
-      signMessage: async (message) => {
-        const sig = await viemSignMessage(client, {
-          message: typeof message === "string" ? message : { raw: message },
-          account: client.account,
-        });
-        return sig;
-      },
-    };
-  }, [client]);
+// ─── wagmi viem Client → ethers JsonRpcSigner adapter ───────────────
+// This is the official approach used by the idOS data dashboard:
+// Convert wagmi's viem Client to ethers BrowserProvider + JsonRpcSigner.
+// The idOS SDK (kwil-js) expects an ethers-compatible signer.
+function clientToSigner(client) {
+  const { account, chain, transport } = client;
+  const network = {
+    chainId: chain.id,
+    name: chain.name,
+    ensAddress: chain.contracts?.ensRegistry?.address,
+  };
+  const provider = new BrowserProvider(transport, network);
+  return new JsonRpcSigner(provider, account.address);
+}
+
+function useEthersSigner({ chainId } = {}) {
+  const { data: walletClient } = useConnectorClient({ chainId });
+  return useMemo(
+    () => (walletClient ? clientToSigner(walletClient) : undefined),
+    [walletClient],
+  );
 }
 
 // ─── Skill Badge Data ────────────────────────────────────────────────
@@ -100,7 +94,7 @@ const SKILL_BADGES = [
 // ─── Main Component ──────────────────────────────────────────────────
 export default function App() {
   const { address, isConnected } = useAccount();
-  const signer = useIdosSigner();
+  const signer = useEthersSigner();
 
   // idOS and wallet state
   const [idosClient, setIdosClient] = useState(null);

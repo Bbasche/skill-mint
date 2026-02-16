@@ -13,8 +13,12 @@ const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || (import.meta.env.PROD ? 
 // ─── wagmi → ethers signer adapter ──────────────────────────────────
 function useEthersSigner({ chainId } = {}) {
   const { data: walletClient } = useConnectorClient({ chainId });
-  return useMemo(() => {
-    if (!walletClient?.transport?.request) return undefined;
+  const [signer, setSigner] = useState(undefined);
+  useEffect(() => {
+    if (!walletClient?.transport?.request) {
+      setSigner(undefined);
+      return;
+    }
     const { account, chain, transport } = walletClient;
     const network = {
       chainId: chain.id,
@@ -22,8 +26,10 @@ function useEthersSigner({ chainId } = {}) {
       ensAddress: chain.contracts?.ensRegistry?.address,
     };
     const provider = new BrowserProvider(transport, network);
-    return new JsonRpcSigner(provider, account.address);
+    // Use getSigner() to get a properly connected signer
+    provider.getSigner(account.address).then(setSigner).catch(() => setSigner(undefined));
   }, [walletClient]);
+  return signer;
 }
 
 // ─── Skill Badge Data ────────────────────────────────────────────────

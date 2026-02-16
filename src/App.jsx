@@ -1,7 +1,6 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { useAccount, useConnectorClient } from "wagmi";
-import { BrowserProvider, JsonRpcSigner } from "ethers";
 import { createIDOSClient } from "@idos-network/client";
 
 // ─── Config ──────────────────────────────────────────────────────────
@@ -10,26 +9,31 @@ const IDOS_ENCLAVE_URL = import.meta.env.VITE_IDOS_ENCLAVE_URL || "https://encla
 const ISSUER_PUBLIC_KEY = import.meta.env.VITE_ISSUER_SIGNING_PUBLIC_KEY;
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || (import.meta.env.PROD ? "" : "http://localhost:3333");
 
-// ─── wagmi → ethers signer adapter ──────────────────────────────────
-function useEthersSigner({ chainId } = {}) {
-  const { data: walletClient } = useConnectorClient({ chainId });
-  const [signer, setSigner] = useState(undefined);
-  useEffect(() => {
-    if (!walletClient?.transport?.request) {
-      setSigner(undefined);
-      return;
-    }
-    const { account, chain, transport } = walletClient;
-    const network = {
-      chainId: chain.id,
-      name: chain.name,
-      ensAddress: chain.contracts?.ensRegistry?.address,
+// ─── wagmi walletClient → ethers-like signer adapter ────────────────
+// Creates a minimal ethers-compatible signer from viem's walletClient
+// that the idOS SDK can use (needs: connect, address, getAddress, signMessage)
+function useIdosSigner() {
+  const { data: walletClient } = useConnectorClient();
+  return useMemo(() => {
+    if (!walletClient) return undefined;
+    const addr = walletClient.account.address;
+    return {
+      // Properties the idOS SDK checks for ethers signer detection
+      address: addr,
+      connect: () => {},
+      getAddress: async () => addr,
+      // signMessage: called by kwil-js with a Uint8Array message
+      // Must return a hex signature string (0x-prefixed)
+      signMessage: async (message) => {
+        // kwil-js passes Uint8Array; viem expects string or { raw: bytes }
+        const sig = await walletClient.signMessage({
+          message: { raw: message instanceof Uint8Array ? message : new TextEncoder().encode(message) },
+          account: walletClient.account,
+        });
+        return sig;
+      },
     };
-    const provider = new BrowserProvider(transport, network);
-    // Use getSigner() to get a properly connected signer
-    provider.getSigner(account.address).then(setSigner).catch(() => setSigner(undefined));
   }, [walletClient]);
-  return signer;
 }
 
 // ─── Skill Badge Data ────────────────────────────────────────────────
@@ -93,7 +97,7 @@ const SKILL_BADGES = [
 // ─── Main Component ──────────────────────────────────────────────────
 export default function App() {
   const { address, isConnected } = useAccount();
-  const signer = useEthersSigner();
+  const signer = useIdosSigner();
 
   // idOS and wallet state
   const [idosClient, setIdosClient] = useState(null);

@@ -117,10 +117,11 @@ export default function App() {
         setErrorMessage("");
 
         // rc.1.0 API: createIDOSClient → createClient → withUserSigner → logIn
+        // container must be a CSS selector string, not a DOM element
         const config = createIDOSClient({
           nodeUrl: IDOS_NODE_URL,
           enclaveOptions: {
-            container: iframeRef.current || document.body,
+            container: "#idOS-enclave",
             url: IDOS_ENCLAVE_URL,
           },
         });

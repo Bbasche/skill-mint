@@ -239,12 +239,15 @@ export default function App() {
           setStatus(`Requesting DWG for ${badge.title}...`);
 
           // Build DWG parameters
+          // The issuer's Kwil identity is uppercase hex (via @stablelib/hex default),
+          // so DWG fields must match that casing for the on-chain comparison.
+          const issuerKeyUpperHex = ISSUER_PUBLIC_KEY.toUpperCase();
           const now = new Date();
           const dwgParams = {
             id: crypto.randomUUID(),
             owner_wallet_identifier: address,
-            grantee_wallet_identifier: ISSUER_PUBLIC_KEY,
-            issuer_public_key: ISSUER_PUBLIC_KEY,
+            grantee_wallet_identifier: issuerKeyUpperHex,
+            issuer_public_key: issuerKeyUpperHex,
             access_grant_timelock: toRFC3339(new Date(now.getTime() + 24 * 60 * 60 * 1000)),
             not_usable_before: toRFC3339(now),
             not_usable_after: toRFC3339(new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000)),

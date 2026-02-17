@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { useAccount, useWalletClient } from "wagmi";
 import { createIDOSClient } from "@idos-network/client";
@@ -52,6 +52,11 @@ function createViemSigner(walletClient) {
     },
   };
   return signer;
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────
+function toRFC3339(date) {
+  return date.toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
 // ─── Skill Badge Data ────────────────────────────────────────────────
@@ -121,12 +126,10 @@ export default function App() {
     [walletClient],
   );
 
-  // idOS and wallet state
+  // idOS state
   const [idosClient, setIdosClient] = useState(null);
   const [idosReady, setIdosReady] = useState(false);
-  const [walletPublicKey, setWalletPublicKey] = useState(null);
-  const [userEncryptionKey, setUserEncryptionKey] = useState(null);
-  const iframeRef = useRef(null);
+  const [hasProfile, setHasProfile] = useState(null);
 
   // Minting state
   const [selectedBadges, setSelectedBadges] = useState(new Set());
@@ -140,16 +143,18 @@ export default function App() {
     if (!address || !signer) {
       setIdosClient(null);
       setIdosReady(false);
+      setHasProfile(null);
       return;
     }
+
+    let cancelled = false;
 
     (async () => {
       try {
         setStatus("Initializing idOS client...");
         setErrorMessage("");
 
-        // rc.1.0 API: createIDOSClient → createClient → withUserSigner → logIn
-        // container must be a CSS selector string, not a DOM element
+        // Step 1: Create configuration
         const config = createIDOSClient({
           nodeUrl: IDOS_NODE_URL,
           enclaveOptions: {
@@ -158,27 +163,47 @@ export default function App() {
           },
         });
 
-        // createClient() internally loads the enclave iframe
+        // Step 2: Create idle client (loads enclave iframe)
         setStatus("Loading idOS enclave...");
-        const idle = await config.createClient();
+        const idleClient = await config.createClient();
+        if (cancelled) return;
 
-        // Attach the wallet signer
+        // Step 3: Connect wallet signer
         setStatus("Connecting wallet signer...");
-        const withSigner = await idle.withUserSigner(signer);
+        const clientWithSigner = await idleClient.withUserSigner(signer);
+        if (cancelled) return;
 
-        // Log in to idOS
+        // Step 4: Check profile and log in
+        const userHasProfile = await clientWithSigner.hasProfile();
+        if (cancelled) return;
+        setHasProfile(userHasProfile);
+
+        if (!userHasProfile) {
+          setStatus("No idOS profile found. Creating one...");
+          const userId = crypto.randomUUID();
+          await clientWithSigner.createUserEncryptionProfile(userId);
+          if (cancelled) return;
+        }
+
         setStatus("Logging in to idOS...");
-        const loggedIn = await withSigner.logIn();
+        const loggedInClient = await clientWithSigner.logIn();
+        if (cancelled) return;
 
-        setIdosClient(loggedIn);
+        setIdosClient(loggedInClient);
         setIdosReady(true);
         setStatus("idOS client ready");
       } catch (err) {
-        console.error("idOS init error:", err);
-        setErrorMessage("Failed to initialize idOS: " + err.message);
-        setIdosReady(false);
+        if (!cancelled) {
+          console.error("idOS init error:", err);
+          setErrorMessage("Failed to initialize idOS: " + err.message);
+          setIdosReady(false);
+        }
       }
     })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [address, signer]);
 
   // ─── Handle badge toggle ──────────────────────────────────────────
@@ -207,25 +232,36 @@ export default function App() {
     setErrorMessage("");
 
     try {
-      // Create credential object for backend
       const badgesToMint = SKILL_BADGES.filter((b) => selectedBadges.has(b.id));
 
       for (const badge of badgesToMint) {
         try {
-          setStatus(`Minting ${badge.title}...`);
+          setStatus(`Requesting DWG for ${badge.title}...`);
 
-          // Request a Delegated Write Grant from idOS
-          const dwgRequest = {
-            writeableCredentialTypes: ["ProfessionalSkillCredential"],
-            requesterPublicKey: Buffer.from(
-              ISSUER_PUBLIC_KEY,
-              "hex"
-            ).toString("base64"),
+          // Build DWG parameters
+          const now = new Date();
+          const dwgParams = {
+            id: crypto.randomUUID(),
+            owner_wallet_identifier: address,
+            grantee_wallet_identifier: ISSUER_PUBLIC_KEY,
+            issuer_public_key: ISSUER_PUBLIC_KEY,
+            access_grant_timelock: toRFC3339(new Date(now.getTime() + 24 * 60 * 60 * 1000)),
+            not_usable_before: toRFC3339(now),
+            not_usable_after: toRFC3339(new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000)),
           };
 
-          const dwg = await idosClient.grantee.requestDelegatedWriteGrant(dwgRequest);
+          // Get DWG message from idOS network
+          const message = await idosClient.requestDWGMessage(dwgParams);
+
+          // Sign the DWG message with user's wallet
+          setStatus(`Sign the DWG to mint ${badge.title}...`);
+          const signature = await signer.signMessage(message);
+
+          // Build full DWG with signature
+          const dwg = { ...dwgParams, signature };
 
           // Send to backend for credential creation
+          setStatus(`Minting ${badge.title}...`);
           const response = await fetch(`${BACKEND_URL}/api/mint`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -233,9 +269,7 @@ export default function App() {
               badge,
               walletAddress: address,
               dwg,
-              userEncryptionPublicKey: userEncryptionKey
-                ? Buffer.from(userEncryptionKey).toString("base64")
-                : null,
+              userEncryptionPublicKey: idosClient.user.recipient_encryption_public_key,
             }),
           });
 
@@ -252,7 +286,6 @@ export default function App() {
         }
       }
 
-      // Clear selection after successful minting
       setSelectedBadges(new Set());
       setStatus("Minting complete!");
     } catch (err) {
@@ -261,7 +294,7 @@ export default function App() {
     } finally {
       setMinting(false);
     }
-  }, [address, idosClient, selectedBadges, userEncryptionKey]);
+  }, [address, idosClient, selectedBadges, signer]);
 
   return (
     <div style={{ minHeight: "100vh", background: "#0f0c29", color: "#e0e0e0", padding: "2rem" }}>
@@ -319,7 +352,7 @@ export default function App() {
               </div>
             )}
 
-            {!idosReady && (
+            {!idosReady && !errorMessage && (
               <div style={{
                 padding: "1rem",
                 background: "#3a3a1e",
@@ -515,9 +548,6 @@ export default function App() {
           </>
         )}
       </div>
-
-      {/* Hidden idOS enclave container */}
-      <div ref={iframeRef} id="idOS-enclave" />
     </div>
   );
 }

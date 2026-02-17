@@ -93,13 +93,14 @@ export default async function handler(req, res) {
       issuedAt: new Date().toISOString(),
     });
 
-    // Decode user encryption public key if provided
+    // Decode the user's encryption public key from their idOS profile
     let recipientEncPubKey;
     if (userEncryptionPublicKey) {
       try {
-        recipientEncPubKey = Uint8Array.from(
-          Buffer.from(userEncryptionPublicKey, "base64")
-        );
+        // The key from idOS user profile may be base64 or hex encoded
+        recipientEncPubKey = userEncryptionPublicKey.length === 64
+          ? Uint8Array.from(Buffer.from(userEncryptionPublicKey, "hex"))
+          : Uint8Array.from(Buffer.from(userEncryptionPublicKey, "base64"));
       } catch {
         // fallback to issuer key
       }

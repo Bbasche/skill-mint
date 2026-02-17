@@ -115,14 +115,14 @@ app.post("/api/mint", async (req, res) => {
       issuedAt: new Date().toISOString(),
     });
 
-    // Decode the user's encryption public key if provided
-    // If not, the issuer will create a copy encrypted to itself
+    // Decode the user's encryption public key from their idOS profile
     let recipientEncPubKey;
     if (userEncryptionPublicKey) {
       try {
-        recipientEncPubKey = Uint8Array.from(
-          Buffer.from(userEncryptionPublicKey, "base64")
-        );
+        // The key from idOS user profile may be base64 or hex encoded
+        recipientEncPubKey = userEncryptionPublicKey.length === 64
+          ? Uint8Array.from(Buffer.from(userEncryptionPublicKey, "hex"))
+          : Uint8Array.from(Buffer.from(userEncryptionPublicKey, "base64"));
       } catch {
         console.warn("Could not decode user encryption public key, using issuer's key");
       }
